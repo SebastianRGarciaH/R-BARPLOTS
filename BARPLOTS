@@ -3,8 +3,8 @@
 # ==============================================================================
 # Description: Analyzes antimicrobial resistance data from multiple databases
 #              and generates stacked barplots showing resistance composition
-# Author: [Your Name]
-# Date: December 2024
+# Author: Sebastián René García Herrero
+# Date: November 2025
 # ==============================================================================
 
 # Load required libraries
