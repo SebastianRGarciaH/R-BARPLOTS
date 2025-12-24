@@ -1,0 +1,232 @@
+# ==============================================================================
+# ANTIMICROBIAL RESISTANCE BARPLOTS
+# ==============================================================================
+# Description: Analyzes antimicrobial resistance data from multiple databases
+#              and generates stacked barplots showing resistance composition
+# Author: [Your Name]
+# Date: December 2024
+# ==============================================================================
+
+# Load required libraries
+library(tidyverse)    # Data manipulation and visualization
+library(readxl)       # Excel file reading
+library(RColorBrewer) # Color palettes for plots
+
+cat("Loading data...\n")
+
+# ==============================================================================
+# DATA IMPORT
+# ==============================================================================
+# Read resistance data from 5 different databases
+argannot <- read_excel("abricate_argannot_results.xlsx")
+megares <- read_excel("abricate_megares_results.xlsx")
+resfinder <- read_excel("datos_limpios_resfinder.xlsx")
+ncbi <- read_excel("datos_limpios_ncbi.xlsx")
+card <- read_excel("abricate_card_results.xlsx")
+
+# ==============================================================================
+# DATA EXTRACTION AND STANDARDIZATION
+# ==============================================================================
+# Extract Sample and Resistance columns from each database
+# Standardize column names across all databases
+
+# ARGannot database
+argAnnotData <- argannot %>%
+  select(Sample, Resistance = 18) %>%  # Column 18 contains resistance info
+  mutate(Database = "ARGannot")
+
+# MEGARES database
+megaresData <- megares %>%
+  select(Sample, Resistance = RESISTANCE) %>%
+  mutate(Database = "MEGARES")
+
+# ResFinder database
+resfinderData <- resfinder %>%
+  select(Sample, Resistance = RESISTANCE) %>%
+  mutate(Database = "ResFinder")
+
+# NCBI database
+ncbiData <- ncbi %>%
+  select(Sample, Resistance = RESISTANCE) %>%
+  mutate(Database = "NCBI")
+
+# CARD database
+cardData <- card %>%
+  select(Sample, Resistance = ncol(card)) %>%  # Last column contains resistance
+  mutate(Database = "CARD")
+
+# ==============================================================================
+# DATA INTEGRATION
+# ==============================================================================
+# Combine all databases into a single dataframe
+allData <- bind_rows(
+  argAnnotData,
+  megaresData,
+  resfinderData,
+  ncbiData,
+  cardData
+)
+
+# ==============================================================================
+# DATA CLEANING
+# ==============================================================================
+# Remove unnecessary suffixes from sample names and clean resistance entries
+allData <- allData %>%
+  mutate(
+    # Clean sample names by removing common suffixes
+    Sample = gsub("_contigs_fasta_genes", "", Sample),
+    Sample = gsub("_contigs", "", Sample),
+    # Trim whitespace from resistance entries
+    Resistance = str_trim(Resistance)
+  ) %>%
+  # Remove rows with missing or empty resistance values
+  filter(!is.na(Resistance) & Resistance != "")
+
+# Print data summary
+cat("Total records:", nrow(allData), "\n")
+cat("Unique resistances:", length(unique(allData$Resistance)), "\n\n")
+
+# ==============================================================================
+# DATA EXPORT
+# ==============================================================================
+# Save combined dataset to CSV file for further analysis
+write.csv(allData, "resistance_all_databases.csv", row.names = FALSE)
+
+# ==============================================================================
+# RELATIVE ABUNDANCE CALCULATION
+# ==============================================================================
+cat("Calculating relative abundance...\n")
+
+# Count occurrences of each resistance type per database
+resistanceCount <- allData %>%
+  group_by(Database, Resistance) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Calculate relative abundance (percentage) for each resistance within each database
+resistanceRel <- resistanceCount %>%
+  group_by(Database) %>%
+  mutate(
+    total = sum(count),                    # Total count per database
+    relAbundance = (count / total) * 100   # Convert to percentage
+  ) %>%
+  ungroup()
+
+# ==============================================================================
+# DATA ORDERING FOR VISUALIZATION
+# ==============================================================================
+# Order resistances by total abundance across all databases (descending)
+resistanceOrder <- resistanceRel %>%
+  group_by(Resistance) %>%
+  summarise(totalAbund = sum(relAbundance)) %>%
+  arrange(desc(totalAbund)) %>%
+  pull(Resistance)
+
+# Convert to factor with ordered levels for proper plotting
+resistanceRel$Resistance <- factor(resistanceRel$Resistance, 
+                                   levels = resistanceOrder)
+
+# Order databases for consistent display
+resistanceRel$Database <- factor(resistanceRel$Database,
+                                 levels = c("ARGannot", "MEGARES", 
+                                          "ResFinder", "NCBI", "CARD"))
+
+# ==============================================================================
+# COLOR PALETTE GENERATION
+# ==============================================================================
+cat("Generating color palette...\n")
+
+numResist <- length(resistanceOrder)
+set.seed(123)  # For reproducible color selection
+
+# Define multiple color palettes for high contrast
+pal1 <- c("#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", "#98D8C8",
+          "#F7DC6F", "#BB8FCE", "#85C1E2", "#F8B739", "#52B788")
+
+pal2 <- c("#2C3E50", "#E74C3C", "#3498DB", "#1ABC9C", "#9B59B6",
+          "#34495E", "#16A085", "#27AE60", "#2980B9", "#8E44AD")
+
+pal3 <- brewer.pal(12, "Set3")   # Pastel colors
+pal4 <- brewer.pal(12, "Paired") # Paired colors
+pal5 <- brewer.pal(8, "Dark2")   # Dark colors
+
+# Combine all palettes by interleaving colors for maximum distinction
+allColors <- c()
+maxLen <- max(length(pal1), length(pal2), length(pal3), length(pal4), length(pal5))
+
+for (i in 1:maxLen) {
+  if (i <= length(pal1)) allColors <- c(allColors, pal1[i])
+  if (i <= length(pal2)) allColors <- c(allColors, pal2[i])
+  if (i <= length(pal3)) allColors <- c(allColors, pal3[i])
+  if (i <= length(pal4)) allColors <- c(allColors, pal4[i])
+  if (i <= length(pal5)) allColors <- c(allColors, pal5[i])
+}
+
+# Select or interpolate colors based on number of resistance types
+if (numResist <= length(allColors)) {
+  # Evenly sample from available colors
+  indices <- round(seq(1, length(allColors), length.out = numResist))
+  colors <- allColors[indices]
+} else {
+  # Generate additional colors if needed
+  pal <- colorRampPalette(allColors)
+  colors <- pal(numResist)
+}
+
+# Assign colors to specific resistance types
+names(colors) <- resistanceOrder
+
+# ==============================================================================
+# VISUALIZATION - STACKED BARPLOT BY DATABASE
+# ==============================================================================
+cat("Creating plot by database...\n")
+
+plotByDB <- ggplot(resistanceRel, 
+                   aes(y = Database, x = relAbundance, fill = Resistance)) +
+  # Create stacked horizontal bars
+  geom_bar(stat = "identity", position = "stack", 
+           color = "black", linewidth = 0.2, width = 0.5) +
+  # Apply custom color palette
+  scale_fill_manual(values = colors) +
+  # Set x-axis limits from 0 to 100%
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 100)) +
+  # Use classic theme as base
+  theme_classic() +
+  # Customize theme elements
+  theme(
+    axis.text.y = element_text(face = "bold", size = 11),
+    axis.text.x = element_text(size = 10),
+    axis.title = element_text(face = "bold", size = 12),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    legend.title = element_text(face = "bold", size = 10),
+    legend.text = element_text(size = 8),
+    legend.key.size = unit(0.4, "cm"),
+    legend.position = "right",
+    panel.grid.major.x = element_line(color = "gray90", linetype = "dashed")
+  ) +
+  # Display legend in single column
+  guides(fill = guide_legend(ncol = 1)) +
+  # Add labels
+  labs(
+    title = "Antimicrobial Resistance Composition by Database",
+    y = "Database",
+    x = "Relative Abundance (%)",
+    fill = "Resistance"
+  )
+
+# Display plot
+print(plotByDB)
+
+# ==============================================================================
+# EXPORT VISUALIZATION
+# ==============================================================================
+# Save high-resolution plot
+ggsave("barplot_resistance_by_DATABASE.png", plotByDB, 
+       width = 17, height = 10, dpi = 300)
+
+# ==============================================================================
+# COMPLETION MESSAGE
+# ==============================================================================
+cat("\nAnalysis completed successfully!\n")
+cat("Output files:\n")
+cat(" • barplot_resistance_by_DATABASE.png\n")
+cat(" • resistance_all_databases.csv\n")
