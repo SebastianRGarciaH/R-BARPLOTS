@@ -15,4 +15,3 @@ Output files:
 - resistance_all_databases.csv: Combined resistance data from all databases
 
 Dependencies: tidyverse, readxl, RColorBrewer
-COMMENTED WITH AI
